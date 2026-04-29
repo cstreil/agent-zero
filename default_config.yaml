@@ -1,0 +1,14 @@
+# Heartbeat Configuration for Agent Zero
+# Copy this to your settings or modify per-project
+
+heartbeat:
+  enabled: true
+  every: "30m"
+  prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+  ack_max_chars: 300
+  active_hours:
+    start: "00:00"
+    end: "24:00"
+    timezone: "local"
+  skip_when_busy: true
+  heartbeat_file: "HEARTBEAT.md"

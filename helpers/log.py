@@ -156,6 +156,7 @@ class LogItem:
     guid: str = ""
     timestamp: float = 0.0
     agentno: int = 0
+    silent: bool = False  # When true, item is not shown in UI
 
     def __post_init__(self):
         self.guid = self.log.guid
@@ -237,6 +238,7 @@ class Log:
         kvps: dict | None = None,
         update_progress: ProgressUpdate | None = None,
         id: Optional[str] = None,
+        silent: bool = False,
         **kwargs,
     ) -> LogItem:
         with self._lock:
@@ -251,6 +253,7 @@ class Log:
                 no=len(self.logs),
                 type=type,
                 agentno=agentno,
+                silent=silent,
             )
 
             self.logs.append(item)
@@ -266,10 +269,12 @@ class Log:
             update_progress=update_progress,
             id=id,
             notify_state_monitor=False,
+            silent=silent,
             **kwargs,
         )
 
-        self._notify_state_monitor()
+        if not silent:
+            self._notify_state_monitor()
         return item
 
     def _update_item(
@@ -282,6 +287,7 @@ class Log:
         update_progress: ProgressUpdate | None = None,
         id: Optional[str] = None,
         notify_state_monitor: bool = True,
+        silent: bool = False,
         **kwargs,
     ):
         # Capture the effective type for truncation without holding the lock during
@@ -347,7 +353,7 @@ class Log:
                         item.no if item.update_progress == "persistent" else -1
                     )
                     self.progress_active = True
-        if notify_state_monitor:
+        if notify_state_monitor and not silent:
             self._notify_state_monitor_for_context_update()
 
     def _notify_state_monitor(self) -> None:

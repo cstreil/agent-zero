@@ -248,10 +248,14 @@ class AgentContext:
         return (self.task and self.task.is_alive()) or False
 
     @extension.extensible
-    def communicate(self, msg: "UserMessage", broadcast_level: int = 1):
+    def communicate(self, msg: "UserMessage", broadcast_level: int = 1, silent: bool = False):
         self.paused = False  # unpause if paused
 
         current_agent = self.get_agent()
+
+        # Store silent flag for this turn
+        if silent:
+            self.data["_heartbeat_silent"] = True
 
         if self.task and self.task.is_alive():
             # set intervention messages to agent(s):
@@ -263,7 +267,7 @@ class AgentContext:
                     Agent.DATA_NAME_SUPERIOR, None
                 )
         else:
-            self.task = self.run_task(self._process_chain, current_agent, msg)
+            self.task = self.run_task(self._process_chain, current_agent, msg, silent)
 
         return self.task
 
@@ -280,7 +284,7 @@ class AgentContext:
 
     # this wrapper ensures that superior agents are called back if the chat was loaded from file and original callstack is gone
     @extension.extensible
-    async def _process_chain(self, agent: "Agent", msg: "UserMessage|str", user=True):
+    async def _process_chain(self, agent: "Agent", msg: "UserMessage|str", user=True, silent=False):
         try:
             msg_template = (
                 agent.hist_add_user_message(msg)  # type: ignore
@@ -289,10 +293,19 @@ class AgentContext:
                     tool_name="call_subordinate", tool_result=msg  # type: ignore
                 )
             )
+
+            # Propagate silent flag to agent context
+            if silent:
+                agent.context.data["_heartbeat_silent"] = True
+
             response = await agent.monologue()  # type: ignore
             superior = agent.data.get(Agent.DATA_NAME_SUPERIOR, None)
             if superior:
-                response = await self._process_chain(superior, response, False)  # type: ignore
+                response = await self._process_chain(superior, response, False, silent)  # type: ignore
+
+            # Handle heartbeat response stripping
+            if silent or agent.context.data.pop("_heartbeat_silent", False):
+                response = await self._handle_heartbeat_response(agent, str(response))
 
             # call end of process extensions
             await extension.call_extensions_async("process_chain_end", agent=self.get_agent(), data={})
@@ -305,6 +318,44 @@ class AgentContext:
     async def handle_exception(self, location: str, exception: Exception):
         if exception:
             raise exception # exception handling is done by extensions
+
+    async def _handle_heartbeat_response(self, agent: "Agent", response: str) -> str:
+        """Strip HEARTBEAT_OK token and suppress empty/ack-only responses."""
+        from helpers.heartbeat import HEARTBEAT_TOKEN
+
+        ack_token = HEARTBEAT_TOKEN
+        ack_max_chars = 300  # Default, could be configurable
+
+        # Strip token from start/end
+        text = response.strip()
+        stripped = False
+
+        # Remove from start
+        while text.startswith(ack_token):
+            text = text[len(ack_token):].strip()
+            stripped = True
+
+        # Remove from end
+        while text.endswith(ack_token):
+            text = text[:-len(ack_token)].strip()
+            stripped = True
+
+        # Also handle HTML/Markdown wrapped tokens
+        import re
+        text = re.sub(r'<[^>]*>\s*' + re.escape(ack_token) + r'\s*</[^>]*>', '', text).strip()
+        text = re.sub(r'\*\*' + re.escape(ack_token) + r'\*\*', '', text).strip()
+        text = re.sub(r'`' + re.escape(ack_token) + r'`', '', text).strip()
+
+        # If stripped and remaining text is empty or <= ack_max_chars, suppress
+        if stripped and len(text) <= ack_max_chars:
+            return ""
+
+        # If response is just the token (or empty after stripping), suppress
+        if not text or text == ack_token:
+            return ""
+
+        # Alert - return the meaningful content
+        return text
 
 
 @dataclass
@@ -380,6 +431,9 @@ class Agent:
                     "monologue_start", self, loop_data=self.loop_data
                 )
 
+                # Check if this is a silent heartbeat turn
+                is_silent = self.context.data.get("_heartbeat_silent", False)
+
                 printer = PrintStyle(italic=True, font_color="#b3ffd9", padding=False)
 
                 # let the agent run message loop until he stops it with a response tool
@@ -409,6 +463,8 @@ class Agent:
 
                         async def reasoning_callback(chunk: str, full: str):
                             await self.handle_intervention()
+                            if is_silent:
+                                return  # No output for silent heartbeat
                             if chunk == full:
                                 printer.print("Reasoning: ")  # start of reasoning
                             # Pass chunk and full data to extensions for processing
@@ -428,6 +484,8 @@ class Agent:
                         async def stream_callback(chunk: str, full: str):
                             nonlocal last_response_stream_full
                             await self.handle_intervention()
+                            if is_silent:
+                                return  # No output for silent heartbeat
                             # output the agent response stream
                             if chunk == full:
                                 printer.print("Response: ")  # start of response
@@ -496,10 +554,11 @@ class Agent:
                             # Append warning message to the history
                             warning_msg = self.read_prompt("fw.msg_repeat.md")
                             wmsg = self.hist_add_warning(message=warning_msg)
-                            PrintStyle(font_color="orange", padding=True).print(
-                                warning_msg
-                            )
-                            self.context.log.log(type="warning", content=warning_msg, id=wmsg.id)
+                            if not is_silent:
+                                PrintStyle(font_color="orange", padding=True).print(
+                                    warning_msg
+                                )
+                                self.context.log.log(type="warning", content=warning_msg, id=wmsg.id)
 
                         else:  # otherwise proceed with tool
                             # Append the assistant's response to the history

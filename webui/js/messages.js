@@ -113,6 +113,8 @@ export async function getMessageHandler(type) {
       return drawMessageUtil;
     case "hint":
       return drawMessageHint;
+    case "heartbeat":
+      return drawMessageHeartbeat;
     default:
       return await getHandlerFromExtensions(type);
   }
@@ -163,8 +165,13 @@ export async function setMessages(messages) {
 
   // process messages
   for (let i = 0; i < context.messages.length; i++) {
+    // Skip silent heartbeat items
+    const msg = context.messages[i];
+    if (msg.type === "heartbeat" && msg.silent) {
+      continue;
+    }
     _massRender = context.historyEmpty || (context.isLargeAppend && i < context.cutoff);
-    context.results.push(await setMessage(context.messages[i]));
+    context.results.push(await setMessage(msg));
   }
 
   await callJsExtensions("set_messages_after_loop", context);
@@ -2262,6 +2269,34 @@ function setupCollapsible(
 // returns false when already in a rendered chat and adding messages regurarly
 function isMassRender() {
   return _massRender;
+}
+
+// heartbeat message renderer - silent by default (returns empty element)
+export function drawMessageHeartbeat({
+  no,
+  id,
+  type,
+  heading,
+  content,
+  kvps,
+  timestamp,
+  agentno,
+}) {
+  // Heartbeat messages are silent by default - return an invisible element
+  // Non-silent heartbeats (alerts) are rendered as info messages
+  const messageDiv = _drawMessage({
+    no,
+    id,
+    type,
+    heading: heading || "Heartbeat",
+    content,
+    kvps,
+    timestamp,
+    agentno,
+    classes: ["heartbeat-message"],
+    hidden: true,
+  });
+  return { element: messageDiv, dontScroll: true };
 }
 
 // smooth fade in animation for new chunks when streaming

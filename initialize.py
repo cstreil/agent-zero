@@ -64,6 +64,9 @@ def initialize_mcp():
 @extension.extensible
 def initialize_job_loop():
     from helpers.job_loop import run_loop
+    from helpers.heartbeat import HeartbeatRunner
+    # Start heartbeat runner alongside job loop
+    HeartbeatRunner.get().start()
     return defer.DeferredTask("JobLoop").start_task(run_loop)
 
 @extension.extensible
