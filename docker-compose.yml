@@ -1,6 +1,5 @@
 services:
   agent-zero:
-    container_name: agent-zero
     build:
       context: .
       dockerfile: DockerfileLocal

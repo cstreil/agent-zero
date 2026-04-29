@@ -98,6 +98,24 @@ is_port_in_use() {
     fi
 }
 
+# --- Container name helpers ---
+
+container_name_taken() {
+    local name="$1"
+    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$name"
+}
+
+suggest_container_name() {
+    local base="${1:-agent-zero}"
+    local candidate="$base"
+    local idx=2
+    while container_name_taken "$candidate"; do
+        candidate="${base}-${idx}"
+        idx=$((idx + 1))
+    done
+    echo "$candidate"
+}
+
 find_free_port() {
     local base="${1:-5080}"
     local candidate="$base"
@@ -171,12 +189,26 @@ main() {
         fi
     fi
 
+    # Generate unique container name
+    CONTAINER_NAME=$(suggest_container_name "agent-zero")
+    if [ "$CONTAINER_NAME" != "agent-zero" ]; then
+        print_warn "Container 'agent-zero' already exists. Using '$CONTAINER_NAME' instead."
+    fi
+
+    # Write compose override with dynamic container name
+    cat > docker-compose.override.yml <<EOF
+services:
+  agent-zero:
+    container_name: ${CONTAINER_NAME}
+EOF
+
     # Build and start
     print_info "Building Agent Zero Docker image (this may take several minutes)..."
-    $COMPOSE build --no-cache || $COMPOSE build
+    $COMPOSE -f docker-compose.yml -f docker-compose.override.yml build --no-cache || \
+        $COMPOSE -f docker-compose.yml -f docker-compose.override.yml build
 
     print_info "Starting Agent Zero..."
-    $COMPOSE up -d
+    $COMPOSE -f docker-compose.yml -f docker-compose.override.yml up -d
 
     # Wait for service
     wait_for_ready "http://localhost:$COMPOSE_PORT"
@@ -184,13 +216,14 @@ main() {
     echo ""
     print_ok "Agent Zero is running!"
     print_info "Web UI:     http://localhost:$COMPOSE_PORT"
+    print_info "Container:  $CONTAINER_NAME"
     print_info "Data dir:   docker volume agent-zero-usr"
-    print_info "Logs:       $COMPOSE logs -f agent-zero"
+    print_info "Logs:       $COMPOSE -f docker-compose.yml -f docker-compose.override.yml logs -f agent-zero"
     echo ""
     print_info "Useful commands:"
-    echo "  $COMPOSE stop agent-zero     # Stop"
-    echo "  $COMPOSE start agent-zero    # Start"
-    echo "  $COMPOSE down -v             # Stop and remove data"
+    echo "  docker stop $CONTAINER_NAME                    # Stop"
+    echo "  docker start $CONTAINER_NAME                   # Start"
+    echo "  $COMPOSE -f docker-compose.yml -f docker-compose.override.yml down -v   # Stop and remove data"
 }
 
 main "$@"
