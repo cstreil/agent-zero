@@ -98,6 +98,22 @@ is_port_in_use() {
     fi
 }
 
+find_free_port() {
+    local base="${1:-5080}"
+    local candidate="$base"
+    local max=100
+    local attempt=0
+    while [ $attempt -lt $max ]; do
+        if ! is_port_in_use "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+        candidate=$((candidate + 1))
+        attempt=$((attempt + 1))
+    done
+    echo "$base"
+}
+
 # --- Container name helpers ---
 
 container_name_taken() {
@@ -114,22 +130,6 @@ suggest_container_name() {
         idx=$((idx + 1))
     done
     echo "$candidate"
-}
-
-find_free_port() {
-    local base="${1:-5080}"
-    local candidate="$base"
-    local max=100
-    local attempt=0
-    while [ $attempt -lt $max ]; do
-        if ! is_port_in_use "$candidate"; then
-            echo "$candidate"
-            return 0
-        fi
-        candidate=$((candidate + 1))
-        attempt=$((attempt + 1))
-    done
-    echo "$base"
 }
 
 # --- Wait for ready ---
@@ -175,31 +175,35 @@ main() {
         exit 1
     fi
 
-    # Detect current Web UI port from compose or use default
-    COMPOSE_PORT=$(grep -oP '(?<=\- ")\d+(?=:80")' docker-compose.yml 2>/dev/null || echo "5080")
-
-    # Check if port is in use
-    if is_port_in_use "$COMPOSE_PORT"; then
-        local new_port
-        new_port=$(find_free_port "$COMPOSE_PORT")
-        if [ "$new_port" != "$COMPOSE_PORT" ]; then
-            print_warn "Port $COMPOSE_PORT is already in use. Updating docker-compose.yml to use $new_port..."
-            sed -i.bak "s/\"$COMPOSE_PORT:80\"/\"$new_port:80\"/" docker-compose.yml
-            COMPOSE_PORT="$new_port"
-        fi
+    # Find a free Web UI port (default 5080)
+    WEB_PORT=$(find_free_port 5080)
+    if [ "$WEB_PORT" != "5080" ]; then
+        print_warn "Port 5080 is already in use. Using $WEB_PORT instead."
     fi
 
-    # Generate unique container name
+    # Generate unique container and volume names
     CONTAINER_NAME=$(suggest_container_name "agent-zero")
+    VOLUME_NAME="agent-zero-usr"
     if [ "$CONTAINER_NAME" != "agent-zero" ]; then
         print_warn "Container 'agent-zero' already exists. Using '$CONTAINER_NAME' instead."
+        VOLUME_NAME="agent-zero-usr-${CONTAINER_NAME#agent-zero-}"
     fi
 
-    # Write compose override with dynamic container name
+    # Write compose override with dynamic name, port, and volume
     cat > docker-compose.override.yml <<EOF
 services:
   agent-zero:
     container_name: ${CONTAINER_NAME}
+    ports:
+      - "${WEB_PORT}:80"
+      - "9022:22"
+      - "9000-9009:9000-9009"
+    volumes:
+      - ${VOLUME_NAME}:/a0/usr
+
+volumes:
+  ${VOLUME_NAME}:
+    driver: local
 EOF
 
     # Build and start
@@ -211,13 +215,13 @@ EOF
     $COMPOSE -f docker-compose.yml -f docker-compose.override.yml up -d
 
     # Wait for service
-    wait_for_ready "http://localhost:$COMPOSE_PORT"
+    wait_for_ready "http://localhost:$WEB_PORT"
 
     echo ""
     print_ok "Agent Zero is running!"
-    print_info "Web UI:     http://localhost:$COMPOSE_PORT"
+    print_info "Web UI:     http://localhost:$WEB_PORT"
     print_info "Container:  $CONTAINER_NAME"
-    print_info "Data dir:   docker volume agent-zero-usr"
+    print_info "Volume:     $VOLUME_NAME"
     print_info "Logs:       $COMPOSE -f docker-compose.yml -f docker-compose.override.yml logs -f agent-zero"
     echo ""
     print_info "Useful commands:"

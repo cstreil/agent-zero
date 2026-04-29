@@ -7,12 +7,6 @@ services:
         BRANCH: local
         CACHE_DATE: none
     image: agent-zero:local
-    volumes:
-      - agent-zero-usr:/a0/usr
-    ports:
-      - "5080:80"
-      - "9022:22"
-      - "9000-9009:9000-9009"
     environment:
       - BRANCH=local
     restart: unless-stopped
@@ -22,7 +16,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-
-volumes:
-  agent-zero-usr:
-    driver: local
